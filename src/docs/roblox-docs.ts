@@ -3,201 +3,267 @@
  * Downloads and caches documentation from the same sources as luau-lsp
  */
 
+import type {
+  APIDump,
+  APIDumpClass,
+  APIDumpProperty,
+  APIDumpFunction,
+  APIDumpEvent,
+  APIDocumentation,
+  APIDocClass,
+  APIDocMember,
+  RawAPIDocEntry,
+  RobloxDocsCache,
+  ClassDocumentation,
+  PropertyDocumentation,
+  MethodDocumentation,
+  MethodParameterDocumentation,
+  EventDocumentation,
+  EventParameterDocumentation,
+  DataTypeDocumentation,
+  EnumDocumentation,
+  EnumItemDocumentation,
+  GlobalDocumentation,
+} from "../types/roblox-docs.js";
+
+// Re-export types for external consumers
+export type {
+  RobloxDocsCache,
+  ClassDocumentation,
+  PropertyDocumentation,
+  MethodDocumentation,
+  MethodParameterDocumentation,
+  EventDocumentation,
+  EventParameterDocumentation,
+  DataTypeDocumentation,
+  EnumDocumentation,
+  EnumItemDocumentation,
+  GlobalDocumentation,
+} from "../types/roblox-docs.js";
+
 // Data source URLs (same as luau-lsp)
 const API_DUMP_URL =
   "https://raw.githubusercontent.com/CloneTrooper1019/Roblox-Client-Tracker/roblox/API-Dump.json";
 const API_DOCS_URL = "https://luau-lsp.pages.dev/api-docs/en-us.json";
 
-// Types for API Dump
-interface APIDumpMember {
-  MemberType: "Property" | "Function" | "Event" | "Callback";
-  Name: string;
-  Description?: string;
-  Tags?: string[];
-  Security?:
-    | string
-    | {
-        Read?: string;
-        Write?: string;
+/**
+ * Transform the flat luau-lsp JSON format into our nested APIDocumentation format.
+ */
+function transformRawAPIDocs(
+  rawDocs: Record<string, RawAPIDocEntry>,
+): APIDocumentation {
+  const result: APIDocumentation = {
+    classes: {},
+    datatypes: {},
+    enums: {},
+    globals: {},
+  };
+
+  const resolveDocRef = (ref: string | undefined): string | undefined => {
+    if (!ref) return undefined;
+    if (ref.startsWith("@roblox/")) {
+      return rawDocs[ref]?.documentation;
+    }
+    return ref;
+  };
+
+  const resolveParams = (
+    params: Array<{ name: string; documentation?: string }> | undefined,
+  ): Array<{ name: string; documentation?: string }> | undefined => {
+    if (!params) return undefined;
+    return params
+      .filter((p) => p.name !== "self")
+      .map((p) => ({
+        name: p.name,
+        documentation: resolveDocRef(p.documentation),
+      }));
+  };
+
+  const resolveReturns = (
+    returns: string[] | undefined,
+  ): string[] | undefined => {
+    if (!returns) return undefined;
+    return returns.map((r) => resolveDocRef(r) || r);
+  };
+
+  const createMemberDoc = (entry: RawAPIDocEntry): APIDocMember => ({
+    name: "",
+    description: entry.documentation,
+    code_sample: entry.code_sample,
+    learn_more_link: entry.learn_more_link,
+    params: resolveParams(entry.params),
+    returns: resolveReturns(entry.returns),
+    overloads: entry.overloads,
+  });
+
+  const ensureClass = (className: string) => {
+    if (!result.classes[className]) {
+      result.classes[className] = {
+        name: className,
+        properties: {},
+        functions: {},
+        events: {},
       };
-}
-
-interface APIDumpProperty extends APIDumpMember {
-  MemberType: "Property";
-  ValueType: {
-    Category: string;
-    Name: string;
+    }
+    return result.classes[className];
   };
-  Category?: string;
-  Default?: string;
+
+  const ensureDataType = (typeName: string) => {
+    if (!result.datatypes![typeName]) {
+      result.datatypes![typeName] = {
+        name: typeName,
+        constructors: {},
+        properties: {},
+        functions: {},
+      };
+    }
+    return result.datatypes![typeName];
+  };
+
+  const ensureEnum = (enumName: string) => {
+    if (!result.enums![enumName]) {
+      result.enums![enumName] = { items: {} };
+    }
+    return result.enums![enumName];
+  };
+
+  for (const [key, entry] of Object.entries(rawDocs)) {
+    // Pattern 1: @roblox/globaltype/ClassName
+    const globalTypeMatch = key.match(
+      /^@roblox\/globaltype\/([A-Z][a-zA-Z0-9]*)$/,
+    );
+    if (globalTypeMatch?.[1]) {
+      const cls = ensureClass(globalTypeMatch[1]);
+      cls.description = entry.documentation;
+      cls.code_sample = entry.code_sample;
+      continue;
+    }
+
+    // Pattern 2: @roblox/globaltype/ClassName.MemberName
+    const memberMatch = key.match(
+      /^@roblox\/globaltype\/([A-Z][a-zA-Z0-9]*)\.([a-zA-Z0-9_]+)$/,
+    );
+    if (memberMatch?.[1] && memberMatch[2]) {
+      const cls = ensureClass(memberMatch[1]);
+      const memberDoc = createMemberDoc(entry);
+      memberDoc.name = memberMatch[2];
+      cls.properties![memberMatch[2]] = memberDoc;
+      cls.functions![memberMatch[2]] = memberDoc;
+      cls.events![memberMatch[2]] = memberDoc;
+      continue;
+    }
+
+    // Pattern 3: @roblox/global/Enum.EnumName
+    const enumDefMatch = key.match(
+      /^@roblox\/global\/Enum\.([A-Z][a-zA-Z0-9]*)$/,
+    );
+    if (enumDefMatch?.[1]) {
+      const enumDoc = ensureEnum(enumDefMatch[1]);
+      enumDoc.description = entry.documentation;
+      enumDoc.learn_more_link = entry.learn_more_link;
+      enumDoc.code_sample = entry.code_sample;
+      continue;
+    }
+
+    // Pattern 4: @roblox/enum/EnumName.ItemName
+    const enumItemMatch = key.match(
+      /^@roblox\/enum\/([A-Z][a-zA-Z0-9]*)\.([a-zA-Z0-9_]+)$/,
+    );
+    if (enumItemMatch?.[1] && enumItemMatch[2]) {
+      const enumDoc = ensureEnum(enumItemMatch[1]);
+      enumDoc.items![enumItemMatch[2]] = {
+        description: entry.documentation,
+        learn_more_link: entry.learn_more_link,
+        code_sample: entry.code_sample,
+      };
+      continue;
+    }
+
+    // Pattern 5: @roblox/global/name
+    const globalMatch = key.match(/^@roblox\/global\/([a-z][a-zA-Z0-9_]*)$/);
+    if (globalMatch?.[1]) {
+      const memberDoc = createMemberDoc(entry);
+      memberDoc.name = globalMatch[1];
+      result.globals![globalMatch[1]] = memberDoc;
+      continue;
+    }
+
+    // Pattern 6: @roblox/global/name.member
+    const globalMemberMatch = key.match(
+      /^@roblox\/global\/([a-z][a-zA-Z0-9_]*)\.([a-zA-Z0-9_]+)$/,
+    );
+    if (globalMemberMatch?.[1] && globalMemberMatch[2]) {
+      const fullName = `${globalMemberMatch[1]}.${globalMemberMatch[2]}`;
+      const memberDoc = createMemberDoc(entry);
+      memberDoc.name = fullName;
+      result.globals![fullName] = memberDoc;
+      continue;
+    }
+
+    // Pattern 7: @roblox/globaltype/TypeName/methodName
+    const datatypeMethodMatch = key.match(
+      /^@roblox\/globaltype\/([A-Z][a-zA-Z0-9]*)\/([a-zA-Z0-9_]+)$/,
+    );
+    if (datatypeMethodMatch?.[1] && datatypeMethodMatch[2]) {
+      const dt = ensureDataType(datatypeMethodMatch[1]);
+      const memberDoc = createMemberDoc(entry);
+      memberDoc.name = datatypeMethodMatch[2];
+      if (datatypeMethodMatch[2] === "new") {
+        dt.constructors![datatypeMethodMatch[2]] = memberDoc;
+      } else {
+        dt.functions![datatypeMethodMatch[2]] = memberDoc;
+      }
+      continue;
+    }
+  }
+
+  return result;
 }
 
-interface APIDumpFunction extends APIDumpMember {
-  MemberType: "Function";
-  Parameters: Array<{
-    Name: string;
-    Type: {
-      Category: string;
-      Name: string;
+// ============================================
+// Helper Functions
+// ============================================
+
+/**
+ * Get member documentation from API docs by member type
+ */
+function getMemberDoc(
+  apiDocClass: APIDocClass | undefined,
+  memberName: string,
+  memberType: string,
+): APIDocMember | undefined {
+  if (!apiDocClass) return undefined;
+  switch (memberType) {
+    case "Property":
+      return apiDocClass.properties?.[memberName];
+    case "Function":
+      return apiDocClass.functions?.[memberName];
+    case "Event":
+      return apiDocClass.events?.[memberName];
+    default:
+      return undefined;
+  }
+}
+
+/**
+ * Parse security info from API dump
+ */
+function parsePropertySecurity(security: APIDumpProperty["Security"]): {
+  read: string;
+  write: string;
+} {
+  if (typeof security === "object") {
+    return {
+      read: security.Read || "None",
+      write: security.Write || "None",
     };
-    Default?: string;
-  }>;
-  ReturnType: {
-    Category: string;
-    Name: string;
-  };
+  }
+  return { read: security || "None", write: security || "None" };
 }
 
-interface APIDumpEvent extends APIDumpMember {
-  MemberType: "Event";
-  Parameters: Array<{
-    Name: string;
-    Type: {
-      Category: string;
-      Name: string;
-    };
-  }>;
-}
-
-interface APIDumpClass {
-  Name: string;
-  Superclass: string;
-  Tags?: string[];
-  Members: Array<APIDumpProperty | APIDumpFunction | APIDumpEvent>;
-}
-
-interface APIDumpEnum {
-  Name: string;
-  Items: Array<{
-    Name: string;
-    Value: number;
-  }>;
-}
-
-interface APIDump {
-  Version: number;
-  Classes: APIDumpClass[];
-  Enums: APIDumpEnum[];
-}
-
-// Types for API Documentation
-interface APIDocMember {
-  name: string;
-  description?: string;
-  code_sample?: string;
-  deprecated?: boolean;
-  learn_more_link?: string;
-}
-
-interface APIDocClass {
-  name: string;
-  description?: string;
-  code_sample?: string;
-  properties?: Record<string, APIDocMember>;
-  functions?: Record<string, APIDocMember>;
-  events?: Record<string, APIDocMember>;
-}
-
-interface APIDocDataType {
-  name: string;
-  description?: string;
-  code_sample?: string;
-  constructors?: Record<string, APIDocMember>;
-  properties?: Record<string, APIDocMember>;
-  functions?: Record<string, APIDocMember>;
-}
-
-interface APIDocumentation {
-  classes: Record<string, APIDocClass>;
-  datatypes?: Record<string, APIDocDataType>;
-  enums?: Record<
-    string,
-    { description?: string; items?: Record<string, string> }
-  >;
-}
-
-// Exported cache type
-export interface RobloxDocsCache {
-  apiDump: APIDump;
-  apiDocs: APIDocumentation | null;
-  lastUpdated: number;
-  version: string;
-}
-
-// Class documentation result
-export interface ClassDocumentation {
-  name: string;
-  superclass: string;
-  description?: string;
-  tags?: string[];
-  properties: PropertyDocumentation[];
-  methods: MethodDocumentation[];
-  events: EventDocumentation[];
-}
-
-export interface PropertyDocumentation {
-  name: string;
-  valueType: string;
-  category?: string;
-  description?: string;
-  tags?: string[];
-  security?: {
-    read: string;
-    write: string;
-  };
-  default?: string;
-}
-
-export interface MethodDocumentation {
-  name: string;
-  description?: string;
-  parameters: Array<{
-    name: string;
-    type: string;
-    default?: string;
-  }>;
-  returnType: string;
-  tags?: string[];
-  security?: string;
-}
-
-export interface EventDocumentation {
-  name: string;
-  description?: string;
-  parameters: Array<{
-    name: string;
-    type: string;
-  }>;
-  tags?: string[];
-  security?: string;
-}
-
-export interface DataTypeDocumentation {
-  name: string;
-  description?: string;
-  constructors?: Array<{
-    name: string;
-    description?: string;
-  }>;
-  properties?: Array<{
-    name: string;
-    description?: string;
-  }>;
-  methods?: Array<{
-    name: string;
-    description?: string;
-  }>;
-}
-
-export interface EnumDocumentation {
-  name: string;
-  description?: string;
-  items: Array<{
-    name: string;
-    value: number;
-    description?: string;
-  }>;
-}
+// ============================================
+// Data Loading
+// ============================================
 
 /**
  * Load Roblox documentation from remote sources
@@ -205,7 +271,6 @@ export interface EnumDocumentation {
 export async function loadRobloxDocs(): Promise<RobloxDocsCache> {
   console.error("[RobloxDocs] Loading API dump...");
 
-  // Load API dump (required)
   const apiDumpResponse = await fetch(API_DUMP_URL);
   if (!apiDumpResponse.ok) {
     throw new Error(
@@ -218,14 +283,19 @@ export async function loadRobloxDocs(): Promise<RobloxDocsCache> {
     `[RobloxDocs] API dump loaded: version ${apiDump.Version}, ${apiDump.Classes.length} classes, ${apiDump.Enums.length} enums`,
   );
 
-  // Load API docs (optional - for descriptions)
   let apiDocs: APIDocumentation | null = null;
   try {
     console.error("[RobloxDocs] Loading API documentation...");
     const apiDocsResponse = await fetch(API_DOCS_URL);
     if (apiDocsResponse.ok) {
-      apiDocs = (await apiDocsResponse.json()) as APIDocumentation;
-      console.error("[RobloxDocs] API documentation loaded");
+      const rawDocs = (await apiDocsResponse.json()) as Record<
+        string,
+        RawAPIDocEntry
+      >;
+      apiDocs = transformRawAPIDocs(rawDocs);
+      console.error(
+        `[RobloxDocs] API documentation loaded: ${Object.keys(apiDocs.classes).length} classes`,
+      );
     } else {
       console.error(
         `[RobloxDocs] API docs unavailable: ${apiDocsResponse.status}`,
@@ -243,6 +313,10 @@ export async function loadRobloxDocs(): Promise<RobloxDocsCache> {
   };
 }
 
+// ============================================
+// Documentation Retrieval Functions
+// ============================================
+
 /**
  * Get documentation for a class
  */
@@ -252,67 +326,65 @@ export function getClassDocs(
   includeInherited = true,
 ): ClassDocumentation | null {
   const classData = cache.apiDump.Classes.find((c) => c.Name === className);
-  if (!classData) {
-    return null;
-  }
+  if (!classData) return null;
 
   const apiDocClass = cache.apiDocs?.classes?.[className];
-
-  // Collect members from this class
   const properties: PropertyDocumentation[] = [];
   const methods: MethodDocumentation[] = [];
   const events: EventDocumentation[] = [];
 
-  // Process members
   for (const member of classData.Members) {
-    const memberDoc = getMemberDescription(
-      apiDocClass,
-      member.Name,
-      member.MemberType,
-    );
+    const memberDoc = getMemberDoc(apiDocClass, member.Name, member.MemberType);
 
     if (member.MemberType === "Property") {
       const prop = member as APIDumpProperty;
-      const security =
-        typeof prop.Security === "object"
-          ? {
-              read: prop.Security.Read || "None",
-              write: prop.Security.Write || "None",
-            }
-          : { read: prop.Security || "None", write: prop.Security || "None" };
-
       properties.push({
         name: prop.Name,
         valueType: prop.ValueType.Name,
         category: prop.Category,
-        description: memberDoc,
+        description: memberDoc?.description,
+        learn_more_link: memberDoc?.learn_more_link,
+        code_sample: memberDoc?.code_sample,
         tags: prop.Tags,
-        security,
+        security: parsePropertySecurity(prop.Security),
         default: prop.Default,
       });
     } else if (member.MemberType === "Function") {
       const func = member as APIDumpFunction;
-      methods.push({
-        name: func.Name,
-        description: memberDoc,
-        parameters: func.Parameters.map((p) => ({
+      const parameters: MethodParameterDocumentation[] = func.Parameters.map(
+        (p, idx) => ({
           name: p.Name,
           type: p.Type.Name,
           default: p.Default,
-        })),
+          description: memberDoc?.params?.[idx]?.documentation,
+        }),
+      );
+      methods.push({
+        name: func.Name,
+        description: memberDoc?.description,
+        learn_more_link: memberDoc?.learn_more_link,
+        code_sample: memberDoc?.code_sample,
+        parameters,
+        returns: memberDoc?.returns,
         returnType: func.ReturnType.Name,
         tags: func.Tags,
         security: typeof func.Security === "string" ? func.Security : undefined,
       });
     } else if (member.MemberType === "Event") {
       const event = member as APIDumpEvent;
-      events.push({
-        name: event.Name,
-        description: memberDoc,
-        parameters: event.Parameters.map((p) => ({
+      const parameters: EventParameterDocumentation[] = event.Parameters.map(
+        (p, idx) => ({
           name: p.Name,
           type: p.Type.Name,
-        })),
+          description: memberDoc?.params?.[idx]?.documentation,
+        }),
+      );
+      events.push({
+        name: event.Name,
+        description: memberDoc?.description,
+        learn_more_link: memberDoc?.learn_more_link,
+        code_sample: memberDoc?.code_sample,
+        parameters,
         tags: event.Tags,
         security:
           typeof event.Security === "string" ? event.Security : undefined,
@@ -320,7 +392,7 @@ export function getClassDocs(
     }
   }
 
-  // Include inherited members if requested
+  // Include inherited members
   if (
     includeInherited &&
     classData.Superclass &&
@@ -328,7 +400,6 @@ export function getClassDocs(
   ) {
     const parentDocs = getClassDocs(cache, classData.Superclass, true);
     if (parentDocs) {
-      // Add inherited members (prepend so they appear after direct members when sorted)
       properties.push(
         ...parentDocs.properties.map((p) => ({
           ...p,
@@ -370,48 +441,136 @@ export function getPropertyDocs(
   propertyName: string,
 ): PropertyDocumentation | null {
   const classData = cache.apiDump.Classes.find((c) => c.Name === className);
-  if (!classData) {
-    return null;
-  }
+  if (!classData) return null;
 
   const propMember = classData.Members.find(
     (m) => m.MemberType === "Property" && m.Name === propertyName,
   ) as APIDumpProperty | undefined;
 
   if (!propMember) {
-    // Try inherited
     if (classData.Superclass && classData.Superclass !== "<<<ROOT>>>") {
       return getPropertyDocs(cache, classData.Superclass, propertyName);
     }
     return null;
   }
 
-  const apiDocClass = cache.apiDocs?.classes?.[className];
-  const description = getMemberDescription(
-    apiDocClass,
+  const memberDoc = getMemberDoc(
+    cache.apiDocs?.classes?.[className],
     propertyName,
     "Property",
   );
-
-  const security =
-    typeof propMember.Security === "object"
-      ? {
-          read: propMember.Security.Read || "None",
-          write: propMember.Security.Write || "None",
-        }
-      : {
-          read: propMember.Security || "None",
-          write: propMember.Security || "None",
-        };
 
   return {
     name: propMember.Name,
     valueType: propMember.ValueType.Name,
     category: propMember.Category,
-    description,
+    description: memberDoc?.description,
+    learn_more_link: memberDoc?.learn_more_link,
+    code_sample: memberDoc?.code_sample,
     tags: propMember.Tags,
-    security,
+    security: parsePropertySecurity(propMember.Security),
     default: propMember.Default,
+  };
+}
+
+/**
+ * Get documentation for a specific method
+ */
+export function getMethodDocs(
+  cache: RobloxDocsCache,
+  className: string,
+  methodName: string,
+): MethodDocumentation | null {
+  const classData = cache.apiDump.Classes.find((c) => c.Name === className);
+  if (!classData) return null;
+
+  const funcMember = classData.Members.find(
+    (m) => m.MemberType === "Function" && m.Name === methodName,
+  ) as APIDumpFunction | undefined;
+
+  if (!funcMember) {
+    if (classData.Superclass && classData.Superclass !== "<<<ROOT>>>") {
+      return getMethodDocs(cache, classData.Superclass, methodName);
+    }
+    return null;
+  }
+
+  const memberDoc = getMemberDoc(
+    cache.apiDocs?.classes?.[className],
+    methodName,
+    "Function",
+  );
+
+  const parameters: MethodParameterDocumentation[] = funcMember.Parameters.map(
+    (p, idx) => ({
+      name: p.Name,
+      type: p.Type.Name,
+      default: p.Default,
+      description: memberDoc?.params?.[idx]?.documentation,
+    }),
+  );
+
+  return {
+    name: funcMember.Name,
+    description: memberDoc?.description,
+    learn_more_link: memberDoc?.learn_more_link,
+    code_sample: memberDoc?.code_sample,
+    parameters,
+    returns: memberDoc?.returns,
+    returnType: funcMember.ReturnType.Name,
+    tags: funcMember.Tags,
+    security:
+      typeof funcMember.Security === "string" ? funcMember.Security : undefined,
+  };
+}
+
+/**
+ * Get documentation for a specific event
+ */
+export function getEventDocs(
+  cache: RobloxDocsCache,
+  className: string,
+  eventName: string,
+): EventDocumentation | null {
+  const classData = cache.apiDump.Classes.find((c) => c.Name === className);
+  if (!classData) return null;
+
+  const eventMember = classData.Members.find(
+    (m) => m.MemberType === "Event" && m.Name === eventName,
+  ) as APIDumpEvent | undefined;
+
+  if (!eventMember) {
+    if (classData.Superclass && classData.Superclass !== "<<<ROOT>>>") {
+      return getEventDocs(cache, classData.Superclass, eventName);
+    }
+    return null;
+  }
+
+  const memberDoc = getMemberDoc(
+    cache.apiDocs?.classes?.[className],
+    eventName,
+    "Event",
+  );
+
+  const parameters: EventParameterDocumentation[] = eventMember.Parameters.map(
+    (p, idx) => ({
+      name: p.Name,
+      type: p.Type.Name,
+      description: memberDoc?.params?.[idx]?.documentation,
+    }),
+  );
+
+  return {
+    name: eventMember.Name,
+    description: memberDoc?.description,
+    learn_more_link: memberDoc?.learn_more_link,
+    code_sample: memberDoc?.code_sample,
+    parameters,
+    tags: eventMember.Tags,
+    security:
+      typeof eventMember.Security === "string"
+        ? eventMember.Security
+        : undefined,
   };
 }
 
@@ -425,7 +584,6 @@ export function getDataTypeDocs(
   const apiDocDataType = cache.apiDocs?.datatypes?.[dataTypeName];
 
   if (!apiDocDataType) {
-    // Return minimal info for known types
     const knownDataTypes = [
       "Vector3",
       "Vector2",
@@ -446,36 +604,46 @@ export function getDataTypeDocs(
       "Faces",
       "PhysicalProperties",
     ];
-
     if (knownDataTypes.includes(dataTypeName)) {
       return {
         name: dataTypeName,
         description: `Roblox ${dataTypeName} data type`,
       };
     }
-
     return null;
   }
 
   return {
     name: dataTypeName,
     description: apiDocDataType.description,
+    learn_more_link: apiDocDataType.learn_more_link,
+    code_sample: apiDocDataType.code_sample,
     constructors: apiDocDataType.constructors
       ? Object.entries(apiDocDataType.constructors).map(([name, data]) => ({
           name,
           description: data.description,
+          learn_more_link: data.learn_more_link,
+          code_sample: data.code_sample,
+          params: data.params,
+          returns: data.returns,
         }))
       : undefined,
     properties: apiDocDataType.properties
       ? Object.entries(apiDocDataType.properties).map(([name, data]) => ({
           name,
           description: data.description,
+          learn_more_link: data.learn_more_link,
+          code_sample: data.code_sample,
         }))
       : undefined,
     methods: apiDocDataType.functions
       ? Object.entries(apiDocDataType.functions).map(([name, data]) => ({
           name,
           description: data.description,
+          learn_more_link: data.learn_more_link,
+          code_sample: data.code_sample,
+          params: data.params,
+          returns: data.returns,
         }))
       : undefined,
   };
@@ -489,40 +657,94 @@ export function getEnumDocs(
   enumName: string,
 ): EnumDocumentation | null {
   const enumData = cache.apiDump.Enums.find((e) => e.Name === enumName);
-  if (!enumData) {
-    return null;
-  }
+  if (!enumData) return null;
 
   const apiDocEnum = cache.apiDocs?.enums?.[enumName];
 
   return {
     name: enumData.Name,
     description: apiDocEnum?.description,
-    items: enumData.Items.map((item) => ({
-      name: item.Name,
-      value: item.Value,
-      description: apiDocEnum?.items?.[item.Name],
-    })),
+    learn_more_link: apiDocEnum?.learn_more_link,
+    code_sample: apiDocEnum?.code_sample,
+    items: enumData.Items.map((item) => {
+      const itemDoc = apiDocEnum?.items?.[item.Name];
+      return {
+        name: item.Name,
+        value: item.Value,
+        description: itemDoc?.description,
+        learn_more_link: itemDoc?.learn_more_link,
+        code_sample: itemDoc?.code_sample,
+      };
+    }),
   };
 }
 
 /**
- * List all available classes
+ * Get documentation for an enum item
  */
+export function getEnumItemDocs(
+  cache: RobloxDocsCache,
+  enumName: string,
+  itemName: string,
+): EnumItemDocumentation | null {
+  const enumData = cache.apiDump.Enums.find((e) => e.Name === enumName);
+  if (!enumData) return null;
+
+  const itemData = enumData.Items.find((i) => i.Name === itemName);
+  if (!itemData) return null;
+
+  const itemDoc = cache.apiDocs?.enums?.[enumName]?.items?.[itemName];
+
+  return {
+    name: itemData.Name,
+    value: itemData.Value,
+    description: itemDoc?.description,
+    learn_more_link: itemDoc?.learn_more_link,
+    code_sample: itemDoc?.code_sample,
+  };
+}
+
+/**
+ * Get documentation for a global variable or function
+ */
+export function getGlobalDocs(
+  cache: RobloxDocsCache,
+  globalName: string,
+): GlobalDocumentation | null {
+  const globalDoc = cache.apiDocs?.globals?.[globalName];
+  if (!globalDoc) return null;
+
+  return {
+    name: globalName,
+    description: globalDoc.description,
+    learn_more_link: globalDoc.learn_more_link,
+    code_sample: globalDoc.code_sample,
+    params: globalDoc.params,
+    returns: globalDoc.returns,
+  };
+}
+
+// ============================================
+// Listing Functions
+// ============================================
+
 export function listClasses(cache: RobloxDocsCache): string[] {
   return cache.apiDump.Classes.map((c) => c.Name).sort();
 }
 
-/**
- * List all available enums
- */
 export function listEnums(cache: RobloxDocsCache): string[] {
   return cache.apiDump.Enums.map((e) => e.Name).sort();
 }
 
-/**
- * Search for classes by partial name
- */
+export function listGlobals(cache: RobloxDocsCache): string[] {
+  if (!cache.apiDocs?.globals) return [];
+  return Object.keys(cache.apiDocs.globals).sort();
+}
+
+// ============================================
+// Search Functions
+// ============================================
+
 export function searchClasses(
   cache: RobloxDocsCache,
   query: string,
@@ -537,9 +759,6 @@ export function searchClasses(
     .slice(0, limit);
 }
 
-/**
- * Search for enums by partial name
- */
 export function searchEnums(
   cache: RobloxDocsCache,
   query: string,
@@ -554,10 +773,6 @@ export function searchEnums(
     .slice(0, limit);
 }
 
-/**
- * Search for properties across all classes by partial name
- * Returns array of { class, property, type }
- */
 export function searchProperties(
   cache: RobloxDocsCache,
   query: string,
@@ -576,9 +791,7 @@ export function searchProperties(
             property: prop.Name,
             type: prop.ValueType.Name,
           });
-          if (results.length >= limit) {
-            return results;
-          }
+          if (results.length >= limit) return results;
         }
       }
     }
@@ -587,9 +800,6 @@ export function searchProperties(
   return results;
 }
 
-/**
- * Unified search across classes, enums, and properties
- */
 export function searchAll(
   cache: RobloxDocsCache,
   query: string,
@@ -604,24 +814,4 @@ export function searchAll(
     enums: searchEnums(cache, query, limit),
     properties: searchProperties(cache, query, limit),
   };
-}
-
-// Helper function to get member description from API docs
-function getMemberDescription(
-  apiDocClass: APIDocClass | undefined,
-  memberName: string,
-  memberType: string,
-): string | undefined {
-  if (!apiDocClass) return undefined;
-
-  switch (memberType) {
-    case "Property":
-      return apiDocClass.properties?.[memberName]?.description;
-    case "Function":
-      return apiDocClass.functions?.[memberName]?.description;
-    case "Event":
-      return apiDocClass.events?.[memberName]?.description;
-    default:
-      return undefined;
-  }
 }

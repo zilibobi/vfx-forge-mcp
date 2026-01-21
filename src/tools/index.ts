@@ -9,7 +9,13 @@ import type { RobloxDocsCache } from "../docs/roblox-docs.js";
 import {
   getClassDocs,
   getPropertyDocs,
+  getMethodDocs,
+  getEventDocs,
   getEnumDocs,
+  getEnumItemDocs,
+  getDataTypeDocs,
+  getGlobalDocs,
+  listGlobals,
   searchAll,
   searchClasses,
   searchEnums,
@@ -40,8 +46,17 @@ const tools = new Map<string, ToolDefinition>();
  * Check if a tool requires plugin connection
  */
 export function isPluginTool(name: string): boolean {
-  const tool = tools.get(name);
-  return tool?.requiresPlugin ?? false;
+  return tools.get(name)?.requiresPlugin ?? false;
+}
+
+/**
+ * Require docs to be loaded, throwing if not available
+ */
+function requireDocs(context: ServerContext): RobloxDocsCache {
+  if (!context.docs) {
+    throw new Error("Roblox documentation not loaded");
+  }
+  return context.docs;
 }
 
 function definePluginTool(
@@ -78,7 +93,7 @@ function defineLocalTool(
   });
 }
 
-// Type hints for property values (all serializable types)
+// Type hints for property values
 const PROPERTY_TYPE_ENUM = [
   "string",
   "number",
@@ -99,7 +114,7 @@ const PROPERTY_TYPE_ENUM = [
   "Instance",
 ];
 
-// Type hints for attribute values (same as properties except Instance and Ray)
+// Type hints for attribute values
 const ATTRIBUTE_TYPE_ENUM = [
   "string",
   "number",
@@ -794,108 +809,209 @@ export function registerTools(): Tool[] {
       required: ["query"],
     },
     async (context, args) => {
-      if (!context.docs) {
-        throw new Error("Roblox documentation not loaded");
-      }
-
+      const docs = requireDocs(context);
       const query = args.query as string;
       const category = (args.category as string) ?? "all";
       const limit = (args.limit as number) ?? 10;
 
       if (category === "classes") {
-        return { classes: searchClasses(context.docs, query, limit) };
+        return { classes: searchClasses(docs, query, limit) };
       } else if (category === "enums") {
-        return { enums: searchEnums(context.docs, query, limit) };
+        return { enums: searchEnums(docs, query, limit) };
       } else if (category === "properties") {
-        return { properties: searchProperties(context.docs, query, limit) };
+        return { properties: searchProperties(docs, query, limit) };
       } else {
-        return searchAll(context.docs, query, limit);
+        return searchAll(docs, query, limit);
       }
     },
   );
 
   defineLocalTool(
     "get_roblox_description",
-    "Get description for a Roblox class, property, or enum. Use this when you need to understand what something does.",
+    "Get documentation for a Roblox API element by type and name.",
     {
       type: "object",
       properties: {
-        class_name: {
+        type: {
           type: "string",
-          description: "Class name (required for class/property lookup)",
+          enum: [
+            "class",
+            "property",
+            "method",
+            "event",
+            "enum",
+            "enum_item",
+            "datatype",
+            "global",
+          ],
+          description: "Type of element to look up",
         },
-        property_name: {
+        name: {
           type: "string",
-          description: "Property name (if looking up a property)",
-        },
-        enum_name: {
-          type: "string",
-          description: "Enum name (if looking up an enum)",
+          description:
+            "Element name. For members use 'ClassName.MemberName' format.",
         },
       },
-      required: [],
+      required: ["type", "name"],
     },
     async (context, args) => {
-      if (!context.docs) {
-        throw new Error("Roblox documentation not loaded");
-      }
+      const docs = requireDocs(context);
+      const lookupType = args.type as string;
+      const name = args.name as string;
 
-      const className = args.class_name as string | undefined;
-      const propertyName = args.property_name as string | undefined;
-      const enumName = args.enum_name as string | undefined;
+      // Parse "ClassName.MemberName" format
+      const dotIndex = name.indexOf(".");
+      const first = dotIndex > 0 ? name.slice(0, dotIndex) : name;
+      const second = dotIndex > 0 ? name.slice(dotIndex + 1) : undefined;
 
-      // Enum lookup
-      if (enumName) {
-        const docs = getEnumDocs(context.docs, enumName);
-        if (!docs) {
-          throw new Error(`Enum not found: ${enumName}`);
+      switch (lookupType) {
+        case "class": {
+          const result = getClassDocs(docs, name, false);
+          if (!result) throw new Error(`Class not found: ${name}`);
+          return {
+            type: "class",
+            name: result.name,
+            superclass: result.superclass,
+            description: result.description || "No description available.",
+          };
         }
-        return {
-          type: "enum",
-          name: docs.name,
-          description: docs.description || "No description available.",
-          items: docs.items.map((i) => i.name),
-        };
-      }
 
-      // Property lookup
-      if (className && propertyName) {
-        const docs = getPropertyDocs(context.docs, className, propertyName);
-        if (!docs) {
-          throw new Error(`Property not found: ${className}.${propertyName}`);
+        case "property": {
+          if (!second)
+            throw new Error(
+              "Property lookup requires 'ClassName.PropertyName' format",
+            );
+          const result = getPropertyDocs(docs, first, second);
+          if (!result) throw new Error(`Property not found: ${name}`);
+          return {
+            type: "property",
+            name: `${first}.${result.name}`,
+            valueType: result.valueType,
+            description: result.description || "No description available.",
+            learn_more_link: result.learn_more_link,
+            code_sample: result.code_sample,
+            writable: result.security?.write === "None",
+            default: result.default,
+          };
         }
-        return {
-          type: "property",
-          name: `${className}.${docs.name}`,
-          valueType: docs.valueType,
-          description: docs.description || "No description available.",
-          writable: docs.security?.write === "None",
-        };
-      }
 
-      // Class lookup
-      if (className) {
-        const docs = getClassDocs(context.docs, className, false);
-        if (!docs) {
-          throw new Error(`Class not found: ${className}`);
+        case "method": {
+          if (!second)
+            throw new Error(
+              "Method lookup requires 'ClassName.MethodName' format",
+            );
+          const result = getMethodDocs(docs, first, second);
+          if (!result) throw new Error(`Method not found: ${name}`);
+          return {
+            type: "method",
+            name: `${first}.${result.name}`,
+            description: result.description || "No description available.",
+            learn_more_link: result.learn_more_link,
+            code_sample: result.code_sample,
+            parameters: result.parameters.map((p) => ({
+              name: p.name,
+              type: p.type,
+              default: p.default,
+              description: p.description,
+            })),
+            returns: result.returns,
+            returnType: result.returnType,
+          };
         }
-        return {
-          type: "class",
-          name: docs.name,
-          superclass: docs.superclass,
-          description: docs.description || "No description available.",
-        };
-      }
 
-      throw new Error(
-        "Provide class_name (for class/property) or enum_name (for enum)",
-      );
+        case "event": {
+          if (!second)
+            throw new Error(
+              "Event lookup requires 'ClassName.EventName' format",
+            );
+          const result = getEventDocs(docs, first, second);
+          if (!result) throw new Error(`Event not found: ${name}`);
+          return {
+            type: "event",
+            name: `${first}.${result.name}`,
+            description: result.description || "No description available.",
+            learn_more_link: result.learn_more_link,
+            code_sample: result.code_sample,
+            parameters: result.parameters.map((p) => ({
+              name: p.name,
+              type: p.type,
+              description: p.description,
+            })),
+          };
+        }
+
+        case "enum": {
+          const result = getEnumDocs(docs, name);
+          if (!result) throw new Error(`Enum not found: ${name}`);
+          return {
+            type: "enum",
+            name: result.name,
+            description: result.description || "No description available.",
+            learn_more_link: result.learn_more_link,
+            code_sample: result.code_sample,
+            items: result.items.map((i) => ({
+              name: i.name,
+              value: i.value,
+              description: i.description,
+            })),
+          };
+        }
+
+        case "enum_item": {
+          if (!second)
+            throw new Error(
+              "Enum item lookup requires 'EnumName.ItemName' format",
+            );
+          const result = getEnumItemDocs(docs, first, second);
+          if (!result) throw new Error(`Enum item not found: ${name}`);
+          return {
+            type: "enum_item",
+            name: `${first}.${result.name}`,
+            value: result.value,
+            description: result.description || "No description available.",
+            learn_more_link: result.learn_more_link,
+            code_sample: result.code_sample,
+          };
+        }
+
+        case "datatype": {
+          const result = getDataTypeDocs(docs, name);
+          if (!result) throw new Error(`Datatype not found: ${name}`);
+          return {
+            type: "datatype",
+            name: result.name,
+            description: result.description || "No description available.",
+            learn_more_link: result.learn_more_link,
+            code_sample: result.code_sample,
+            constructors: result.constructors?.map((c) => c.name),
+            properties: result.properties?.map((p) => p.name),
+            methods: result.methods?.map((m) => m.name),
+          };
+        }
+
+        case "global": {
+          const result = getGlobalDocs(docs, name);
+          if (!result) throw new Error(`Global not found: ${name}`);
+          return {
+            type: "global",
+            name: result.name,
+            description: result.description || "No description available.",
+            learn_more_link: result.learn_more_link,
+            code_sample: result.code_sample,
+            params: result.params,
+            returns: result.returns,
+          };
+        }
+
+        default:
+          throw new Error(`Unknown lookup type: ${lookupType}`);
+      }
     },
   );
 
   defineLocalTool(
     "get_roblox_class_docs",
-    "Get Roblox class documentation. Returns properties with name:type, optionally methods/events.",
+    "Get Roblox class documentation with member listings.",
     {
       type: "object",
       properties: {
@@ -915,36 +1031,29 @@ export function registerTools(): Tool[] {
       required: ["class_name"],
     },
     async (context, args) => {
-      if (!context.docs) {
-        throw new Error("Roblox documentation not loaded");
-      }
-
+      const docs = requireDocs(context);
       const className = args.class_name as string;
       const includeInherited = (args.include_inherited as boolean) ?? false;
       const members = (args.members as string) ?? "properties";
 
-      const docs = getClassDocs(context.docs, className, includeInherited);
-      if (!docs) {
-        throw new Error(`Class not found: ${className}`);
-      }
+      const result = getClassDocs(docs, className, includeInherited);
+      if (!result) throw new Error(`Class not found: ${className}`);
 
-      // Return compact format based on members filter
-      const result: Record<string, unknown> = {
-        name: docs.name,
-        superclass: docs.superclass,
+      const output: Record<string, unknown> = {
+        name: result.name,
+        superclass: result.superclass,
       };
 
       if (members === "all" || members === "properties") {
-        // Compact: just name -> type mapping
-        result.properties = Object.fromEntries(
-          docs.properties
-            .filter((p) => p.security?.write === "None") // Only writable
+        output.properties = Object.fromEntries(
+          result.properties
+            .filter((p) => p.security?.write === "None")
             .map((p) => [p.name, p.valueType]),
         );
       }
 
       if (members === "all" || members === "methods") {
-        result.methods = docs.methods.map((m) => ({
+        output.methods = result.methods.map((m) => ({
           name: m.name,
           params: m.parameters.map((p) => `${p.name}: ${p.type}`).join(", "),
           returns: m.returnType,
@@ -952,13 +1061,13 @@ export function registerTools(): Tool[] {
       }
 
       if (members === "all" || members === "events") {
-        result.events = docs.events.map((e) => ({
+        output.events = result.events.map((e) => ({
           name: e.name,
           params: e.parameters.map((p) => `${p.name}: ${p.type}`).join(", "),
         }));
       }
 
-      return result;
+      return output;
     },
   );
 
@@ -974,53 +1083,76 @@ export function registerTools(): Tool[] {
       required: ["class_name", "property_name"],
     },
     async (context, args) => {
-      if (!context.docs) {
-        throw new Error("Roblox documentation not loaded");
-      }
-
+      const docs = requireDocs(context);
       const className = args.class_name as string;
       const propertyName = args.property_name as string;
 
-      const docs = getPropertyDocs(context.docs, className, propertyName);
-      if (!docs) {
+      const result = getPropertyDocs(docs, className, propertyName);
+      if (!result)
         throw new Error(`Property not found: ${className}.${propertyName}`);
-      }
 
       return {
-        name: docs.name,
-        type: docs.valueType,
-        writable: docs.security?.write === "None",
-        description: docs.description,
+        name: result.name,
+        type: result.valueType,
+        writable: result.security?.write === "None",
+        description: result.description,
+        learn_more_link: result.learn_more_link,
+        code_sample: result.code_sample,
+        default: result.default,
+        category: result.category,
       };
     },
   );
 
   defineLocalTool(
     "get_roblox_enum_docs",
-    "Get enum values.",
+    "Get enum values with descriptions.",
     {
       type: "object",
       properties: {
         enum_name: { type: "string", description: "Enum name" },
+        include_descriptions: {
+          type: "boolean",
+          description: "Include item descriptions (default: false)",
+          default: false,
+        },
       },
       required: ["enum_name"],
     },
     async (context, args) => {
-      if (!context.docs) {
-        throw new Error("Roblox documentation not loaded");
-      }
-
+      const docs = requireDocs(context);
       const enumName = args.enum_name as string;
-      const docs = getEnumDocs(context.docs, enumName);
-      if (!docs) {
-        throw new Error(`Enum not found: ${enumName}`);
-      }
+      const includeDescriptions =
+        (args.include_descriptions as boolean) ?? false;
 
-      // Compact: just list item names
+      const result = getEnumDocs(docs, enumName);
+      if (!result) throw new Error(`Enum not found: ${enumName}`);
+
       return {
-        name: docs.name,
-        items: docs.items.map((i) => i.name),
+        name: result.name,
+        description: result.description,
+        learn_more_link: result.learn_more_link,
+        items: includeDescriptions
+          ? result.items.map((i) => ({
+              name: i.name,
+              value: i.value,
+              description: i.description,
+            }))
+          : result.items.map((i) => i.name),
       };
+    },
+  );
+
+  defineLocalTool(
+    "list_roblox_globals",
+    "List all available global variables and functions.",
+    {
+      type: "object",
+      properties: {},
+    },
+    async (context) => {
+      const docs = requireDocs(context);
+      return { globals: listGlobals(docs) };
     },
   );
 
@@ -1066,7 +1198,7 @@ export function registerTools(): Tool[] {
       type: "object",
       properties: {},
     },
-    async (context, _args) => {
+    async (context) => {
       const info = context.bridge.getConnectionInfo();
       return {
         connected: info.connected,
