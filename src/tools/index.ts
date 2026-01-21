@@ -522,14 +522,6 @@ export function registerTools(): Tool[] {
     required: ["path", "scale"],
   });
 
-  definePluginTool("get_bounding_box", "Get bounding box of an instance.", {
-    type: "object",
-    properties: {
-      path: { type: "string", description: "Instance path" },
-    },
-    required: ["path"],
-  });
-
   // ============================================
   // Bulk Operation Tools
   // ============================================
@@ -548,95 +540,27 @@ export function registerTools(): Tool[] {
   });
 
   definePluginTool(
-    "bulk_set_color",
-    "Set Color3 property on multiple instances.",
+    "bulk_pivot_to",
+    `PivotTo multiple models to new CFrames. ${VALUE_TYPE_HINT}`,
     {
       type: "object",
       properties: {
-        paths: {
+        operations: {
           type: "array",
-          items: { type: "string" },
-          description: "Instance paths",
-        },
-        color: {
-          type: "object",
-          properties: {
-            r: { type: "number", minimum: 0, maximum: 1 },
-            g: { type: "number", minimum: 0, maximum: 1 },
-            b: { type: "number", minimum: 0, maximum: 1 },
+          items: {
+            type: "object",
+            properties: {
+              path: { type: "string", description: "Model instance path" },
+              cframe: { description: "Target CFrame (use _type: 'CFrame')" },
+            },
+            required: ["path", "cframe"],
           },
-          required: ["r", "g", "b"],
-          description: "Color (0-1 values)",
+          description: "List of model paths and target CFrames",
         },
       },
-      required: ["paths", "color"],
+      required: ["operations"],
     },
   );
-
-  definePluginTool(
-    "bulk_set_color3_attribute",
-    "Set Color3 attribute on multiple instances.",
-    {
-      type: "object",
-      properties: {
-        paths: {
-          type: "array",
-          items: { type: "string" },
-          description: "Instance paths",
-        },
-        color: {
-          type: "object",
-          properties: {
-            r: { type: "number", minimum: 0, maximum: 1 },
-            g: { type: "number", minimum: 0, maximum: 1 },
-            b: { type: "number", minimum: 0, maximum: 1 },
-          },
-          required: ["r", "g", "b"],
-          description: "Color (0-1 values)",
-        },
-      },
-      required: ["paths", "color"],
-    },
-  );
-
-  definePluginTool(
-    "bulk_set_transparency",
-    "Set Transparency on multiple instances.",
-    {
-      type: "object",
-      properties: {
-        paths: {
-          type: "array",
-          items: { type: "string" },
-          description: "Instance paths",
-        },
-        scale: { type: "number", description: "Transparency (0-1)" },
-      },
-      required: ["paths", "scale"],
-    },
-  );
-
-  definePluginTool("bulk_move", "Move multiple instances by offset.", {
-    type: "object",
-    properties: {
-      paths: {
-        type: "array",
-        items: { type: "string" },
-        description: "Instance paths",
-      },
-      offset: {
-        type: "object",
-        properties: {
-          x: { type: "number" },
-          y: { type: "number" },
-          z: { type: "number" },
-        },
-        required: ["x", "y", "z"],
-        description: "Movement offset",
-      },
-    },
-    required: ["paths", "offset"],
-  });
 
   definePluginTool("bulk_delete", "Delete multiple instances.", {
     type: "object",
