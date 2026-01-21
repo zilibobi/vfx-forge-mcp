@@ -179,8 +179,10 @@ function transformRawAPIDocs(
       continue;
     }
 
-    // Pattern 5: @roblox/global/name
-    const globalMatch = key.match(/^@roblox\/global\/([a-z][a-zA-Z0-9_]*)$/);
+    // Pattern 5: @roblox/global/name or @luau/global/name
+    const globalMatch = key.match(
+      /^@(?:roblox|luau)\/global\/([a-z][a-zA-Z0-9_]*)$/,
+    );
     if (globalMatch?.[1]) {
       const memberDoc = createMemberDoc(entry);
       memberDoc.name = globalMatch[1];
@@ -188,9 +190,9 @@ function transformRawAPIDocs(
       continue;
     }
 
-    // Pattern 6: @roblox/global/name.member
+    // Pattern 6: @roblox/global/name.member or @luau/global/name.member
     const globalMemberMatch = key.match(
-      /^@roblox\/global\/([a-z][a-zA-Z0-9_]*)\.([a-zA-Z0-9_]+)$/,
+      /^@(?:roblox|luau)\/global\/([a-z][a-zA-Z0-9_]*)\.([a-zA-Z0-9_]+)$/,
     );
     if (globalMemberMatch?.[1] && globalMemberMatch[2]) {
       const fullName = `${globalMemberMatch[1]}.${globalMemberMatch[2]}`;
