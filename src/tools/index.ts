@@ -11,6 +11,9 @@ import {
   getPropertyDocs,
   getEnumDocs,
   searchAll,
+  searchClasses,
+  searchEnums,
+  searchProperties,
 } from "../docs/roblox-docs.js";
 import {
   getDataTypeFormat,
@@ -778,6 +781,11 @@ export function registerTools(): Tool[] {
       type: "object",
       properties: {
         query: { type: "string", description: "Search term (partial match)" },
+        category: {
+          type: "string",
+          enum: ["all", "classes", "enums", "properties"],
+          description: "What to search (default: all)",
+        },
         limit: {
           type: "number",
           description: "Max results per category (default: 10)",
@@ -791,9 +799,97 @@ export function registerTools(): Tool[] {
       }
 
       const query = args.query as string;
+      const category = (args.category as string) ?? "all";
       const limit = (args.limit as number) ?? 10;
 
-      return searchAll(context.docs, query, limit);
+      if (category === "classes") {
+        return { classes: searchClasses(context.docs, query, limit) };
+      } else if (category === "enums") {
+        return { enums: searchEnums(context.docs, query, limit) };
+      } else if (category === "properties") {
+        return { properties: searchProperties(context.docs, query, limit) };
+      } else {
+        return searchAll(context.docs, query, limit);
+      }
+    },
+  );
+
+  defineLocalTool(
+    "get_roblox_description",
+    "Get description for a Roblox class, property, or enum. Use this when you need to understand what something does.",
+    {
+      type: "object",
+      properties: {
+        class_name: {
+          type: "string",
+          description: "Class name (required for class/property lookup)",
+        },
+        property_name: {
+          type: "string",
+          description: "Property name (if looking up a property)",
+        },
+        enum_name: {
+          type: "string",
+          description: "Enum name (if looking up an enum)",
+        },
+      },
+      required: [],
+    },
+    async (context, args) => {
+      if (!context.docs) {
+        throw new Error("Roblox documentation not loaded");
+      }
+
+      const className = args.class_name as string | undefined;
+      const propertyName = args.property_name as string | undefined;
+      const enumName = args.enum_name as string | undefined;
+
+      // Enum lookup
+      if (enumName) {
+        const docs = getEnumDocs(context.docs, enumName);
+        if (!docs) {
+          throw new Error(`Enum not found: ${enumName}`);
+        }
+        return {
+          type: "enum",
+          name: docs.name,
+          description: docs.description || "No description available.",
+          items: docs.items.map((i) => i.name),
+        };
+      }
+
+      // Property lookup
+      if (className && propertyName) {
+        const docs = getPropertyDocs(context.docs, className, propertyName);
+        if (!docs) {
+          throw new Error(`Property not found: ${className}.${propertyName}`);
+        }
+        return {
+          type: "property",
+          name: `${className}.${docs.name}`,
+          valueType: docs.valueType,
+          description: docs.description || "No description available.",
+          writable: docs.security?.write === "None",
+        };
+      }
+
+      // Class lookup
+      if (className) {
+        const docs = getClassDocs(context.docs, className, false);
+        if (!docs) {
+          throw new Error(`Class not found: ${className}`);
+        }
+        return {
+          type: "class",
+          name: docs.name,
+          superclass: docs.superclass,
+          description: docs.description || "No description available.",
+        };
+      }
+
+      throw new Error(
+        "Provide class_name (for class/property) or enum_name (for enum)",
+      );
     },
   );
 
