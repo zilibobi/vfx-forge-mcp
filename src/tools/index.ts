@@ -1158,13 +1158,14 @@ export function registerTools(): Tool[] {
 
   defineLocalTool(
     "get_datatype_format",
-    `Get JSON serialization format for a Roblox datatype. Available: ${getAvailableDataTypes().join(", ")}`,
+    "Get JSON serialization format for a Roblox datatype.",
     {
       type: "object",
       properties: {
         datatype_name: {
           type: "string",
-          description: "Datatype name (Vector3, Color3, etc.)",
+          enum: getAvailableDataTypes(),
+          description: "Datatype name",
         },
       },
       required: ["datatype_name"],
