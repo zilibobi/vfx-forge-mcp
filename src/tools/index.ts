@@ -176,25 +176,6 @@ export function registerTools(): Tool[] {
     required: ["path"],
   });
 
-  definePluginTool(
-    "get_instance_info",
-    "Get detailed info about an instance including properties, attributes, and tags.",
-    {
-      type: "object",
-      properties: {
-        path: { type: "string", description: "Instance path" },
-        include_children: {
-          type: "boolean",
-          description: "Include children list",
-          default: false,
-        },
-        include_attributes: { type: "boolean", default: true },
-        include_tags: { type: "boolean", default: true },
-      },
-      required: ["path"],
-    },
-  );
-
   definePluginTool("instance_exists", "Check if an instance exists.", {
     type: "object",
     properties: {
@@ -381,14 +362,18 @@ export function registerTools(): Tool[] {
 
   definePluginTool(
     "set_part_collision_group",
-    "Assign a part to a collision group.",
+    "Assign parts to a collision group.",
     {
       type: "object",
       properties: {
-        path: { type: "string", description: "Part instance path" },
+        paths: {
+          type: "array",
+          items: { type: "string" },
+          description: "Part instance paths",
+        },
         group: { type: "string", description: "Collision group name" },
       },
-      required: ["path", "group"],
+      required: ["paths", "group"],
     },
   );
 
@@ -415,48 +400,6 @@ export function registerTools(): Tool[] {
         },
       },
       required: ["class_name", "parent"],
-    },
-  );
-
-  definePluginTool(
-    "create_effect_preset",
-    "Create a preset VFX effect (fire, smoke, sparkles, etc.).",
-    {
-      type: "object",
-      properties: {
-        preset: {
-          type: "string",
-          enum: [
-            "fire",
-            "smoke",
-            "sparkles",
-            "magic_circle",
-            "lightning",
-            "explosion",
-            "heal",
-            "buff",
-            "shield",
-            "trail",
-            "glow",
-            "impact",
-            "aura",
-            "rain",
-            "snow",
-          ],
-          description: "Preset name",
-        },
-        parent: { type: "string", description: "Parent instance path" },
-        position: {
-          type: "object",
-          properties: {
-            x: { type: "number" },
-            y: { type: "number" },
-            z: { type: "number" },
-          },
-          description: "Optional position offset",
-        },
-      },
-      required: ["preset", "parent"],
     },
   );
 
@@ -502,24 +445,6 @@ export function registerTools(): Tool[] {
       },
     },
     required: ["paths"],
-  });
-
-  // ============================================
-  // Transform Tools
-  // ============================================
-
-  definePluginTool("scale_instance", "Scale an instance uniformly.", {
-    type: "object",
-    properties: {
-      path: { type: "string", description: "Instance path" },
-      scale: {
-        type: "number",
-        description: "Scale factor (>0)",
-        minimum: 0,
-        exclusiveMinimum: true,
-      },
-    },
-    required: ["path", "scale"],
   });
 
   // ============================================
@@ -573,77 +498,6 @@ export function registerTools(): Tool[] {
     },
     required: ["paths"],
   });
-
-  // ============================================
-  // VFX-Specific Tools
-  // ============================================
-
-  definePluginTool("get_effect_types", "List available VFX effect types.", {
-    type: "object",
-    properties: {
-      effect_type: {
-        type: "string",
-        enum: ["particle", "beam", "trail", "light", "all"],
-        description: "Filter by type",
-      },
-    },
-    required: ["effect_type"],
-  });
-
-  definePluginTool("analyze_effect", "Analyze a VFX effect setup.", {
-    type: "object",
-    properties: {
-      path: { type: "string", description: "Effect instance path" },
-    },
-    required: ["path"],
-  });
-
-  definePluginTool("get_bezier_curve", "Get bezier curve data for animation.", {
-    type: "object",
-    properties: {
-      path: { type: "string", description: "Instance with curve" },
-      curve_name: { type: "string", description: "Curve name" },
-    },
-    required: ["path", "curve_name"],
-  });
-
-  definePluginTool("set_bezier_curve", "Set bezier curve data for animation.", {
-    type: "object",
-    properties: {
-      path: { type: "string", description: "Instance path" },
-      curve_name: { type: "string", description: "Curve name" },
-      points: {
-        type: "array",
-        items: {
-          type: "object",
-          properties: {
-            time: { type: "number", minimum: 0, maximum: 1 },
-            value: { type: "number", minimum: 0, maximum: 1 },
-            left_tangent: {
-              type: "object",
-              properties: { x: { type: "number" }, y: { type: "number" } },
-            },
-            right_tangent: {
-              type: "object",
-              properties: { x: { type: "number" }, y: { type: "number" } },
-            },
-          },
-          required: ["time", "value"],
-        },
-        description: "Curve points",
-      },
-      preset: {
-        type: "string",
-        enum: ["linear", "ease_in", "ease_out", "ease_in_out"],
-        description: "Use preset instead of points",
-      },
-    },
-    required: ["path", "curve_name"],
-  });
-
-  // ============================================
-  // More Bulk Operations
-  // ============================================
 
   definePluginTool(
     "bulk_set_attribute",
