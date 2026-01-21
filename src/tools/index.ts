@@ -1010,136 +1010,109 @@ export function registerTools(): Tool[] {
   );
 
   defineLocalTool(
-    "get_roblox_class_docs",
-    "Get Roblox class documentation with member listings.",
+    "get_roblox_members",
+    "Get members of a Roblox class, enum, or datatype.",
     {
       type: "object",
       properties: {
-        class_name: { type: "string", description: "Class name" },
+        type: {
+          type: "string",
+          enum: ["class", "enum", "datatype"],
+          description: "Type of element",
+        },
+        name: {
+          type: "string",
+          description: "Class, enum, or datatype name",
+        },
         include_inherited: {
           type: "boolean",
-          description: "Include inherited members (default: false)",
-          default: false,
+          description:
+            "For classes: include inherited members (default: false)",
         },
         members: {
           type: "string",
           enum: ["all", "properties", "methods", "events"],
-          description: "Which members to return (default: properties)",
-          default: "properties",
+          description: "For classes: which members to return (default: all)",
         },
       },
-      required: ["class_name"],
+      required: ["type", "name"],
     },
     async (context, args) => {
       const docs = requireDocs(context);
-      const className = args.class_name as string;
-      const includeInherited = (args.include_inherited as boolean) ?? false;
-      const members = (args.members as string) ?? "properties";
+      const lookupType = args.type as string;
+      const name = args.name as string;
 
-      const result = getClassDocs(docs, className, includeInherited);
-      if (!result) throw new Error(`Class not found: ${className}`);
+      switch (lookupType) {
+        case "class": {
+          const includeInherited = (args.include_inherited as boolean) ?? false;
+          const members = (args.members as string) ?? "all";
 
-      const output: Record<string, unknown> = {
-        name: result.name,
-        superclass: result.superclass,
-      };
+          const result = getClassDocs(docs, name, includeInherited);
+          if (!result) throw new Error(`Class not found: ${name}`);
 
-      if (members === "all" || members === "properties") {
-        output.properties = Object.fromEntries(
-          result.properties
-            .filter((p) => p.security?.write === "None")
-            .map((p) => [p.name, p.valueType]),
-        );
+          const output: Record<string, unknown> = {
+            type: "class",
+            name: result.name,
+            superclass: result.superclass,
+          };
+
+          if (members === "all" || members === "properties") {
+            output.properties = Object.fromEntries(
+              result.properties
+                .filter((p) => p.security?.write === "None")
+                .map((p) => [p.name, p.valueType]),
+            );
+          }
+
+          if (members === "all" || members === "methods") {
+            output.methods = result.methods.map((m) => ({
+              name: m.name,
+              params: m.parameters
+                .map((p) => `${p.name}: ${p.type}`)
+                .join(", "),
+              returns: m.returnType,
+            }));
+          }
+
+          if (members === "all" || members === "events") {
+            output.events = result.events.map((e) => ({
+              name: e.name,
+              params: e.parameters
+                .map((p) => `${p.name}: ${p.type}`)
+                .join(", "),
+            }));
+          }
+
+          return output;
+        }
+
+        case "enum": {
+          const result = getEnumDocs(docs, name);
+          if (!result) throw new Error(`Enum not found: ${name}`);
+
+          return {
+            type: "enum",
+            name: result.name,
+            items: result.items.map((i) => i.name),
+          };
+        }
+
+        case "datatype": {
+          const result = getDataTypeDocs(docs, name);
+          if (!result) throw new Error(`Datatype not found: ${name}`);
+
+          return {
+            type: "datatype",
+            name: result.name,
+            constructors: result.constructors?.map((c) => c.name),
+            properties: result.properties?.map((p) => p.name),
+            methods: result.methods?.map((m) => m.name),
+          };
+        }
+
+        default:
+          throw new Error(`Unknown type: ${lookupType}`);
       }
-
-      if (members === "all" || members === "methods") {
-        output.methods = result.methods.map((m) => ({
-          name: m.name,
-          params: m.parameters.map((p) => `${p.name}: ${p.type}`).join(", "),
-          returns: m.returnType,
-        }));
-      }
-
-      if (members === "all" || members === "events") {
-        output.events = result.events.map((e) => ({
-          name: e.name,
-          params: e.parameters.map((p) => `${p.name}: ${p.type}`).join(", "),
-        }));
-      }
-
-      return output;
-    },
-  );
-
-  defineLocalTool(
-    "get_roblox_property_docs",
-    "Get detailed docs for a specific property.",
-    {
-      type: "object",
-      properties: {
-        class_name: { type: "string", description: "Class name" },
-        property_name: { type: "string", description: "Property name" },
-      },
-      required: ["class_name", "property_name"],
-    },
-    async (context, args) => {
-      const docs = requireDocs(context);
-      const className = args.class_name as string;
-      const propertyName = args.property_name as string;
-
-      const result = getPropertyDocs(docs, className, propertyName);
-      if (!result)
-        throw new Error(`Property not found: ${className}.${propertyName}`);
-
-      return {
-        name: result.name,
-        type: result.valueType,
-        writable: result.security?.write === "None",
-        description: result.description,
-        learn_more_link: result.learn_more_link,
-        code_sample: result.code_sample,
-        default: result.default,
-        category: result.category,
-      };
-    },
-  );
-
-  defineLocalTool(
-    "get_roblox_enum_docs",
-    "Get enum values with descriptions.",
-    {
-      type: "object",
-      properties: {
-        enum_name: { type: "string", description: "Enum name" },
-        include_descriptions: {
-          type: "boolean",
-          description: "Include item descriptions (default: false)",
-          default: false,
-        },
-      },
-      required: ["enum_name"],
-    },
-    async (context, args) => {
-      const docs = requireDocs(context);
-      const enumName = args.enum_name as string;
-      const includeDescriptions =
-        (args.include_descriptions as boolean) ?? false;
-
-      const result = getEnumDocs(docs, enumName);
-      if (!result) throw new Error(`Enum not found: ${enumName}`);
-
-      return {
-        name: result.name,
-        description: result.description,
-        learn_more_link: result.learn_more_link,
-        items: includeDescriptions
-          ? result.items.map((i) => ({
-              name: i.name,
-              value: i.value,
-              description: i.description,
-            }))
-          : result.items.map((i) => i.name),
-      };
     },
   );
 
